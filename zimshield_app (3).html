@@ -353,7 +353,12 @@ select, input[type=text] {
   <input type="password" id="apiKeyInput" placeholder="AIzaSy... (paste your free Gemini key here)">
   <button onclick="saveKey()">✓ Activate AI</button>
 </div>
-<div id="api-ok-msg">✅ Gemini AI is LIVE — all 3 chat features are active and free!</div>
+<div id="api-ok-msg">
+  ✅ Gemini AI is LIVE — all 3 chat features are active and free!
+  &nbsp;&nbsp;
+  <button onclick="testKey()" style="background:var(--navy);color:white;border:none;padding:5px 12px;border-radius:6px;font-size:0.75rem;font-weight:700;cursor:pointer;">🔍 Test Key</button>
+</div>
+<div id="key-test-result" style="display:none;padding:8px 14px;font-size:0.78rem;font-weight:600;text-align:center;"></div>
 
 <!-- ═══ HEADER ═══ -->
 <div id="header">
@@ -783,84 +788,211 @@ function saveKey() {
   toast('✅ Gemini AI activated — all chat features are now live!');
 }
 
-async function callGemini(systemPrompt, userMessage) {
-  // ── Guard: no key ──
+// ── Key diagnostic test ──
+async function testKey() {
+  const resultDiv = document.getElementById('key-test-result');
+  resultDiv.style.display = '';
+  resultDiv.style.background = '#0d2748';
+  resultDiv.style.color = '#8fa8c8';
+  resultDiv.textContent = '🔍 Testing your API key...';
+
   if (!GEMINI_KEY) {
-    return "⚠️ Please add your free Gemini API key in the yellow banner at the top. Get one free at aistudio.google.com — no credit card needed!";
+    resultDiv.style.background = '#7d1a1a';
+    resultDiv.style.color = 'white';
+    resultDiv.textContent = '❌ No key saved. Paste your key in the banner and click Activate AI first.';
+    return;
   }
 
-  // ── Guard: opened as local file (file://) ──
-  // Browsers block external API calls from file:// for security.
-  // Solution: user must open the app via a web address (http/https).
-  if (window.location.protocol === 'file:') {
-    return "⚠️ LOCAL FILE DETECTED — The AI cannot run when the app is opened directly from your computer as a file.\n\n✅ HOW TO FIX (takes 2 minutes, free):\n1. Go to app.netlify.com/drop in your browser\n2. Drag and drop this HTML file onto that page\n3. Netlify gives you a web link (e.g. https://abc123.netlify.app)\n4. Open that link — the AI will work perfectly!\n\nAlternatively: send the file to yourself on WhatsApp, then open it in Chrome on your phone.";
-  }
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: 'Say the word OK and nothing else.' }] }],
+        generationConfig: { maxOutputTokens: 5 }
+      })
+    });
 
-  // ── Try calling Gemini API ──
-  // We use two different Gemini endpoints as fallback in case one fails
-  const ENDPOINTS = [
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`,
-  ];
-
-  for (let attempt = 0; attempt < ENDPOINTS.length; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 20000); // 20 second timeout
-
-      const res = await fetch(ENDPOINTS[attempt], {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ role: 'user', parts: [{ text: userMessage }] }],
-          generationConfig: {
-            maxOutputTokens: 500,
-            temperature: 0.7,
-            topP: 0.9,
-          }
-        })
-      });
-
-      clearTimeout(timeout);
-
-      // Handle HTTP errors with clear messages
-      if (res.status === 400) return '⚠️ Invalid request. Your API key may be incorrect. Please check and re-enter it in the yellow banner.';
-      if (res.status === 401 || res.status === 403) return '⚠️ API key rejected. Please go to aistudio.google.com, create a new key, and paste it in the yellow banner at the top.';
-      if (res.status === 429) return '⚠️ Too many requests. The free Gemini plan allows 15 requests per minute. Please wait 30 seconds and try again.';
-      if (res.status === 500 || res.status === 503) {
-        if (attempt < ENDPOINTS.length - 1) continue; // try next endpoint
-        return '⚠️ Gemini servers are temporarily busy. Please try again in a moment.';
-      }
-
+    if (res.status === 200) {
       const data = await res.json();
+      const txt = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      resultDiv.style.background = '#1a4d2e';
+      resultDiv.style.color = '#2ecc71';
+      resultDiv.textContent = '✅ Key is working perfectly! AI response: "' + txt.trim() + '"';
+      return;
+    }
+    if (res.status === 400 || res.status === 401 || res.status === 403) {
+      resultDiv.style.background = '#7d1a1a';
+      resultDiv.style.color = 'white';
+      resultDiv.textContent = '❌ KEY INVALID (Error ' + res.status + '). Your key is wrong or has been deleted. Go to aistudio.google.com → Get API key → create a NEW key → paste it in the banner above → click Activate AI.';
+      // Clear bad key
+      GEMINI_KEY = '';
+      localStorage.removeItem('zimshield_gemini_key');
+      document.getElementById('setup-banner').style.display = '';
+      document.getElementById('api-ok-msg').style.display = 'none';
+      return;
+    }
+    if (res.status === 429) {
+      resultDiv.style.background = '#5a3a00';
+      resultDiv.style.color = '#f5a623';
+      resultDiv.textContent = '⚠️ KEY IS VALID but rate limited right now. Wait 60 seconds then try again. This is temporary.';
+      return;
+    }
+    resultDiv.style.background = '#5a3a00';
+    resultDiv.style.color = '#f5a623';
+    resultDiv.textContent = '⚠️ Unexpected response (Status ' + res.status + '). Try again in a moment.';
+  } catch(e) {
+    resultDiv.style.background = '#7d1a1a';
+    resultDiv.style.color = 'white';
+    resultDiv.textContent = '❌ Network error during test: ' + e.message + '. Check your internet connection.';
+  }
+}
 
-      if (data.error) {
-        const msg = data.error.message || '';
-        if (msg.includes('API_KEY')) return '⚠️ Invalid API key. Go to aistudio.google.com → Get API key → create a new one and paste it above.';
-        if (msg.includes('quota')) return '⚠️ Daily free limit reached. The free tier allows 1,500 requests per day. Try again tomorrow or upgrade at aistudio.google.com.';
-        return '⚠️ API error: ' + msg;
+// ── Rate limiting & queue ──
+const MIN_GAP_MS = 5000;   // 5 seconds between calls = max 12/min (safe under free 15/min limit)
+let   lastCallTime = 0;
+let   callQueue    = Promise.resolve();
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ─────────────────────────────────────────────────────────────
+// callAI — tries Gemini first, falls back to OpenRouter (free)
+// Both are completely free — no credit card needed for either
+// ─────────────────────────────────────────────────────────────
+async function callGemini(systemPrompt, userMessage) {
+
+  // Guard: local file
+  if (window.location.protocol === 'file:') {
+    return "⚠️ LOCAL FILE DETECTED — AI cannot run from a local file.\n\n✅ EASY FIX: Upload to GitHub Pages or Vercel (free) and open the web link instead.";
+  }
+
+  // Enforce minimum gap between calls to avoid rate limits
+  callQueue = callQueue.then(async () => {
+    const wait = MIN_GAP_MS - (Date.now() - lastCallTime);
+    if (wait > 0) await sleep(wait);
+    lastCallTime = Date.now();
+  });
+  await callQueue;
+
+  // ── PROVIDER 1: Gemini (if key is saved) ──
+  if (GEMINI_KEY) {
+    const MODELS = ['gemini-2.0-flash','gemini-1.5-flash','gemini-1.5-flash-8b'];
+    for (let m = 0; m < MODELS.length; m++) {
+      try {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 25000);
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${MODELS[m]}:generateContent?key=${GEMINI_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify({
+              system_instruction: { parts: [{ text: systemPrompt }] },
+              contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+              generationConfig: { maxOutputTokens: 500, temperature: 0.7 }
+            })
+          }
+        );
+        clearTimeout(tid);
+
+        if (res.status === 429) {
+          // Rate limited on this model — try next model
+          if (m < MODELS.length - 1) { await sleep(3000); continue; }
+          // All Gemini models rate limited — fall through to backup provider
+          appendSystemMsg('⚡ Gemini busy — switching to backup AI provider automatically...');
+          break;
+        }
+        if (res.status === 400 || res.status === 401 || res.status === 403) {
+          // Bad key — fall through to backup
+          appendSystemMsg('⚡ Gemini key issue — switching to backup AI provider...');
+          break;
+        }
+        if (res.status === 500 || res.status === 503) {
+          if (m < MODELS.length - 1) continue;
+          break; // fall through to backup
+        }
+
+        const data = await res.json();
+        if (data.error) {
+          const msg = data.error.message || '';
+          if (msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED')) {
+            if (m < MODELS.length - 1) continue;
+            appendSystemMsg('⚡ Gemini quota reached — switching to backup AI...');
+            break;
+          }
+          if (m < MODELS.length - 1) continue;
+          break;
+        }
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text && m < MODELS.length - 1) continue;
+        if (text) return text;
+        break;
+
+      } catch(e) {
+        if (e.name === 'AbortError' && m < MODELS.length - 1) continue;
+        if (m < MODELS.length - 1) continue;
+        appendSystemMsg('⚡ Gemini unreachable — switching to backup AI...');
+        break;
       }
-
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) return '⚠️ Empty response from AI. Please try asking your question again.';
-      return text;
-
-    } catch(e) {
-      // Timeout
-      if (e.name === 'AbortError') {
-        if (attempt < ENDPOINTS.length - 1) continue;
-        return '⚠️ Request timed out. Your internet connection may be slow. Please check your connection and try again.';
-      }
-      // Network / CORS error
-      if (attempt < ENDPOINTS.length - 1) continue;
-      return `⚠️ Connection failed. Please check:\n1. Your internet is working (try opening google.com)\n2. The app is opened via a web link, not as a local file\n3. Your API key is correctly pasted above\n\nError detail: ${e.message}`;
     }
   }
-  return '⚠️ Could not reach the AI. Please try again.';
+
+  // ── PROVIDER 2: OpenRouter — free, no key needed for basic models ──
+  // Uses mistralai/mistral-7b-instruct which is free on OpenRouter
+  try {
+    const controller2 = new AbortController();
+    const tid2 = setTimeout(() => controller2.abort(), 25000);
+    const res2 = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'HTTP-Referer': window.location.href,
+        'X-Title': 'ZimShield Drug Prevention App',
+        // No API key needed for free tier models on OpenRouter
+      },
+      signal: controller2.signal,
+      body: JSON.stringify({
+        model: 'mistralai/mistral-7b-instruct:free',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: userMessage  }
+        ],
+        max_tokens: 500,
+        temperature: 0.7
+      })
+    });
+    clearTimeout(tid2);
+
+    if (res2.ok) {
+      const d2 = await res2.json();
+      const t2 = d2.choices?.[0]?.message?.content;
+      if (t2) {
+        appendSystemMsg('(Response from backup AI provider)');
+        return t2;
+      }
+    }
+
+    // OpenRouter also failed — try one more free provider (Pollinations)
+    const res3 = await fetch('https://text.pollinations.ai/' + encodeURIComponent(systemPrompt + '\n\nUser: ' + userMessage), {
+      method: 'GET',
+      signal: (new AbortController()).signal,
+    });
+    if (res3.ok) {
+      const t3 = await res3.text();
+      if (t3 && t3.length > 10) {
+        appendSystemMsg('(Response from backup AI provider)');
+        return t3;
+      }
+    }
+
+  } catch(e2) {
+    // All providers failed
+  }
+
+  // All providers exhausted
+  return "⚠️ All AI providers are currently busy or unavailable.\n\nPlease try one of these:\n1. Wait 60 seconds and send your message again\n2. Check your internet connection is working\n3. Get a fresh Gemini key at aistudio.google.com and paste it in the yellow banner\n\nAll other app features (quiz, SOS, tracker, reporting) still work normally.";
 }
 
 // ═══════════════════════════════════════════════════
@@ -881,6 +1013,19 @@ const SYS = {
 
 const chatHistory = { learn: [], counsel: [], recover: [] };
 const chatSystems = { learn: SYS.learn, counsel: SYS.counsel, recover: SYS.recover };
+
+// Show a system status message in ALL chat boxes (e.g. rate limit warnings)
+function appendSystemMsg(text) {
+  ['learn','counsel','recover'].forEach(id => {
+    const box = document.getElementById('chat-' + id);
+    if (!box) return;
+    const div = document.createElement('div');
+    div.style.cssText = 'text-align:center;font-size:0.75rem;color:#f5a623;padding:6px;font-style:italic;';
+    div.textContent = text;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  });
+}
 
 function appendMsg(chatId, role, text) {
   const box = document.getElementById('chat-' + chatId);
